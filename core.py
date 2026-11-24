@@ -18,6 +18,7 @@ from PIL import Image, ImageOps
 from pypdf import PdfReader
 
 from layouts import LAYOUT_LABELS
+from content_structure import diagram_for, rank_excerpts
 
 MAX_FILE = 20 * 1024 * 1024
 MAX_TEXT = 100_000
@@ -246,23 +247,22 @@ def make_outline(doc: SourceDoc, pages=10, title="", subtitle=""):
     for section_title, group in groups:
         source_ids = list(dict.fromkeys(b["id"] for b, _ in group))
         sentences = [s for _, s in group]
-        # Evenly sample across the full group. Every original sentence stays in notes.
-        if len(sentences) > 4:
-            positions = [round(j * (len(sentences)-1) / 3) for j in range(4)]
-            bullets = [sentences[j] for j in positions]
-        else:
-            bullets = sentences
+        excerpts = rank_excerpts(group)
+        bullets = [value for _, value in excerpts]
+        if not bullets:
+            excerpts = [(group[0][0]["id"], sentences[0])]
+            bullets = [sentences[0]]
         page_title = section_title
         if page_title in {doc.title, "输入文字"}:
             page_title = sentences[0][:36]
         notes = "\n".join(sentences)
-        if len(sentences) > 4:
-            notes = "【规则分段：正文为原文摘选，完整段落如下】\n" + notes
+        notes = ("【上屏要点来源】\n" + "\n".join(f"[{sid}] {value}" for sid, value in excerpts)
+                 + "\n\n【本页原文摘录】\n" + notes)
         slides.append({"title": page_title[:100], "bullets": bullets,
                        "notes": notes, "source_ids": source_ids,
                        "layout": "auto", "image": "", "image_caption": "",
                        "purpose": f"说明{page_title[:60]}",
-                       "relationship": "sequence" if re.search(r"流程|步骤|技术路线", page_title) else "parallel"})
+                       "relationship": "sequence" if diagram_for({"bullets": bullets}) == "flow" else "parallel"})
     # Summary is explicitly an extract rather than an invented research conclusion.
     summary = [s["bullets"][0] for s in slides if s["bullets"]]
     if len(summary) > 4:
@@ -272,10 +272,10 @@ def make_outline(doc: SourceDoc, pages=10, title="", subtitle=""):
                    "layout": "auto", "image": "", "image_caption": "",
                    "purpose": "回顾原文要点及适用边界", "relationship": "parallel"})
     return {"title": title or doc.title, "subtitle": subtitle, "mode": "规则分段",
-            "slides": slides, "warnings": ["规则模式按章节分段摘选，不等同于 AI 理解；未上屏的文字保留在讲稿备注。章节较多时，优先保持章节完整，页数可超过目标。"]}
+            "slides": slides, "warnings": ["规则模式按原文筛选要点，优先保留目标、方法、结果、数字和限制。讲稿备注提供上屏要点来源和本页原文摘录。章节较多时，页数可超过目标。"]}
 
 
-def validate_outline(outline, valid_ids):
+def validate_outline(outline, valid_ids, *, personal=False):
     if not isinstance(outline, dict) or not isinstance(outline.get("slides"), list):
         raise UserError("大纲格式不正确：需要 slides 数组。")
     if not 1 <= len(outline["slides"]) <= 29:
@@ -283,21 +283,35 @@ def validate_outline(outline, valid_ids):
     if not isinstance(outline.get("title"), str) or not 1 <= len(outline["title"].strip()) <= 120:
         raise UserError("汇报标题需为 1–120 字。")
     for i, s in enumerate(outline["slides"], 1):
-        if not isinstance(s, dict) or not isinstance(s.get("title"), str) or not 1 <= len(s["title"].strip()) <= 100:
-            raise UserError(f"第 {i} 张内容页的标题需为 1–100 字。")
+        if (not isinstance(s, dict) or not isinstance(s.get("title"), str)
+                or not (0 if personal else 1) <= len(s["title"].strip()) <= 100):
+            raise UserError(f"第 {i} 张内容页的标题过长。" if personal else f"第 {i} 张内容页的标题需为 1–100 字。")
         bullets = s.get("bullets")
-        if not isinstance(bullets, list) or not 1 <= len(bullets) <= 6:
-            raise UserError(f"第 {i} 张内容页需要 1–6 条要点。")
+        if not isinstance(bullets, list) or not (0 if personal else 1) <= len(bullets) <= (24 if personal else 6):
+            raise UserError(f"第 {i} 页的文字较多，请拆成几页。" if personal else f"第 {i} 张内容页需要 1–6 条要点。")
         if any(not isinstance(b, str) or not b.strip() or len(b) > 500 for b in bullets):
             raise UserError(f"第 {i} 张内容页的每条要点需为 1–500 字，长内容请拆分页面。")
         ids = s.get("source_ids")
-        if not isinstance(ids, list) or not ids or any(not isinstance(v, str) or v not in valid_ids for v in ids):
+        if not isinstance(ids, list) or (not personal and not ids) or any(not isinstance(v, str) or v not in valid_ids for v in ids):
             raise UserError(f"第 {i} 张内容页缺少有效原文依据。")
         if not isinstance(s.get("notes", ""), str) or len(s.get("notes", "")) > 150_000:
             raise UserError(f"第 {i} 张内容页的备注格式不正确。")
         for field_name, limit in (("purpose", 180), ("image_caption", 200)):
             if not isinstance(s.get(field_name, ""), str) or len(s.get(field_name, "")) > limit:
                 raise UserError(f"第 {i} 张内容页的目的或图片出处过长。")
+        if personal:
+            figures = s.get("figures", [])
+            if not isinstance(figures, list) or len(figures) > MAX_IMAGES:
+                raise UserError(f"第 {i} 页的图片过多。")
+            for figure in figures:
+                if (not isinstance(figure, dict) or not isinstance(figure.get("asset"), str)
+                        or not isinstance(figure.get("caption", ""), str) or len(figure.get("caption", "")) > 200):
+                    raise UserError(f"第 {i} 页的图片或图注格式无效。")
+                bullet = figure.get("bullet")
+                if bullet is not None and (type(bullet) is not int or not 0 <= bullet < len(bullets)):
+                    raise UserError(f"第 {i} 页有图片关联到不存在的要点。")
+            if not s["title"].strip() and not bullets and not figures and not s.get("image"):
+                raise UserError(f"第 {i} 页还没有文字或图片，请先添加内容。")
     return outline
 
 

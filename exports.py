@@ -15,6 +15,9 @@ from skill_audit import audit
 def scene_html(scene,interactive=False):
     esc=html.escape
     elements=[]
+    if scene.get("backdrop"):
+        elements.append(f'<img alt="" aria-hidden="true" src="{esc(scene["backdrop"], quote=True)}" '
+                        'style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">')
     for e in scene["elements"]:
         position=f'position:absolute;left:{e["x"]}px;top:{e["y"]}px;width:{e["w"]}px;height:{e["h"]}px;box-sizing:border-box;'
         identifier=esc(e["id"])
@@ -29,7 +32,12 @@ def scene_html(scene,interactive=False):
             attributes=''
             if interactive and e.get('role') in {'title','body','subtitle','caption'}:
                 attributes=f' class="reveal editable" data-edit-id="{identifier}" data-role="{e["role"]}"'
-            elements.append(f'<{tag} id="{identifier}"{attributes} style="{position}{css}">{esc(e["text"])}</{tag}>')
+            body = esc(e["text"])
+            if e.get("runs"):
+                body = "\n".join("".join(
+                    f'<span style="font-weight:{700 if span["bold"] else 400};color:{esc(span["color"])}">'
+                    f'{esc(span["text"])}</span>' for span in line) for line in e["runs"])
+            elements.append(f'<{tag} id="{identifier}"{attributes} style="{position}{css}">{body}</{tag}>')
         else:
             b64=base64.b64encode(e["data"]).decode()
             elements.append(f'<img id="{identifier}" alt="用户选择的原图" src="data:image/jpeg;base64,{b64}" style="{position}object-fit:contain">')
@@ -69,7 +77,7 @@ def evidence_record(doc,outline):
     return {'document':getattr(doc,'metadata',{'filename':doc.title}),'blocks':doc.blocks,
         'extracted_images':[{k:i.get(k,'') for k in ('name','source','pdf_page','width','height')} for i in doc.images],
         'pages':[
-        {k:s.get(k,'') for k in ('title','purpose','relationship','source_ids','image','image_caption')}
+        {k:s.get(k,'') for k in ('title','purpose','relationship','source_ids','image','image_caption','figures')}
         for s in outline['slides']],
         'boundary':'DOIs are text candidates, not externally verified. Figure numbers and interpretation require author review.'}
 
