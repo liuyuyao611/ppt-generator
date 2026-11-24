@@ -1,0 +1,23 @@
+{
+  "source": "https://github.com/zarazhangrui/frontend-slides",
+  "files_sha256": {
+    "animation-patterns.md": "1b7b7409893b68c09effb04f20a4603a5168e4956d76c3999c2ba8f86c4bbc8f",
+    "html-template.md": "893ab49200ed5c3186d3b031333f5b61916b179dad2dafd5572ff8f66cd0b91a",
+    "LICENSE": "62928eb197fe4662d1efc3af0735b3ba5df3c0308badd9a2baf2b619009f5366",
+    "README.md": "d6e9c138f6c423a5fb3722c7b77ed2fff2ae3106cbf2c1e99b67bcfec783a0ac",
+    "STYLE_PRESETS.md": "b0093ae6f9c295e561c7d4a9ddf69d0edfd2810b1721ba1c2022a1ad9681c82c",
+    "viewport-base.css": "7424eb3fca809d85eedb3019a7b5bff571dc553c7b73b02120d068e12b2a6a03",
+    "bold-template-pack/selection-index.json": "0a60514a41af2be821f833025efdbf22ba7e3106d59f4aa76a0510341f37b504",
+    "fonts/DMSans-OFL.txt": "9af36190332437f5ecd09974de43c1f7c77a310a996cdd8ceb25628b458840e1",
+    "fonts/DMSans.woff2": "07fde2f314f45bcf032d1a5b7b6a682236e8cfc73e483ec393214955c1a12d81",
+    "fonts/manifest.json": "80a498e2a5fce29c0282076480a6b1d628c2f186ef979f3a6148be67664d0e34",
+    "fonts/Manrope-OFL.txt": "58172e0c0fac2cda8a37b348164bb55e44b0e69051e557e92b1d3f6910141f7b",
+    "fonts/Manrope.woff2": "15ef7535376043f8e7b47ab3cbed1c56c351a10c9914c3df22477b4086f70011",
+    "fonts/NotoSansSC-OFL.txt": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9",
+    "fonts/NotoSansSC.ttf": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+    "fonts/SourceSerif4-OFL.txt": "5f94c3fd3a23131a417ab5a0c8452de57e70c3cfb9f604d88241f7065ebf9fd9",
+    "fonts/SourceSerif4.woff2": "16f410a3be0fc70b90b5640f64a405b5011538d12739be88d12d91fc63ef63d5",
+    "bold-template-pack/templates/signal/design.md": "8734d989e2c315398a341b23f02eacc10e30158018c4e0aafb161ddfe422b7f5",
+    "bold-template-pack/templates/signal/preview.md": "4da8d49501aebba28081acb41853ff06b9267039e839e9d62cd992bbd96fc950"
+  }
+}

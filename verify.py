@@ -20,6 +20,9 @@ from core import (DEFAULT_STYLE, SourceDoc, UserError, ai_outline, extract_style
 from renderer import build_scenes, export_pptx, scene_svg
 from layouts import LAYOUT_LABELS, recommend_layout
 from exports import audit_native, deck_html, export_bundle
+from frontend_slides import (THEMES,frontend_scenes,density_outline,edit_bindings,
+    edit_signature,apply_frontend_edits,font_css,ASSETS)
+from frontend_player import frontend_html
 
 ROOT = Path(__file__).parent
 
@@ -241,6 +244,68 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(UserError):
             validate_outline(out, {"S1", "S2"})
 
+    def test_frontend_themes_canvas_and_native_geometry(self):
+        out=make_outline(self.doc,6,subtitle='课程汇报')
+        for name in THEMES:
+            for density in ('reading','speaking'):
+                scenes,theme=frontend_scenes(out,name,density)
+                self.assertTrue(all((s['width'],s['height'])==(1920,1080) for s in scenes))
+                ppt=Presentation(io.BytesIO(export_pptx(scenes)))
+                self.assertAlmostEqual(ppt.slide_width/ppt.slide_height,16/9,places=5)
+                self.assertTrue(audit_native(scenes,export_pptx(scenes))['passed'])
+                for slide in ppt.slides:
+                    for shape in slide.shapes:
+                        self.assertLessEqual(shape.left+shape.width,ppt.slide_width+100)
+                        self.assertLessEqual(shape.top+shape.height,ppt.slide_height+100)
+
+    def test_frontend_density_preserves_every_body_character(self):
+        out=make_outline(self.doc,6)
+        out['slides'][0]['bullets']=['原始条件 123.45 mm，Independent validation; '+'校准流程。'*35]*4
+        for density in ('reading','speaking'):
+            result=density_outline(out,density)
+            original=''.join(b for s in out['slides'] for b in s['bullets'])
+            actual=''.join(b for s in result['slides'] for b in s['bullets'])
+            self.assertEqual(actual,original)
+            scenes,_=frontend_scenes(out,'electric-studio',density)
+            native=''.join(e.get('original_text','') for s in scenes for e in s['elements'] if e.get('role')=='body')
+            self.assertEqual(native,original)
+
+    def test_frontend_edits_roundtrip_and_wrong_deck_rejection(self):
+        out=make_outline(self.doc,6)
+        out['slides'][0]['bullets']=['保留条件 12.5 mm。'+'独立校准与验证。'*18]
+        scenes,_=frontend_scenes(out,'signal','speaking')
+        bindings=edit_bindings(scenes)
+        title=next(k for k,v in bindings.items() if v['role']=='title' and v['slide']==-1)
+        body=next(k for k,v in bindings.items() if v['role']=='body' and v['slide']==0)
+        edited={'schema':'slidecraft-frontend-edits/v1','deck_id':edit_signature(scenes),
+                'edits':{title:'修改后的实验汇报',body:'新的校准内容。'}}
+        result=apply_frontend_edits(out,scenes,edited)
+        self.assertEqual(result['title'],'修改后的实验汇报')
+        self.assertEqual(result['slides'][0]['bullets'][0],
+            '新的校准内容。'+out['slides'][0]['bullets'][0][len(bindings[body]['text']):])
+        self.assertEqual(result['slides'][0]['source_ids'],out['slides'][0]['source_ids'])
+        split=apply_frontend_edits(out,scenes,{**edited,'edits':{body:'新的第一条。\n新的第二条。'}})
+        self.assertEqual(split['slides'][0]['bullets'][:2],['新的第一条。','新的第二条。'+out['slides'][0]['bullets'][0][len(bindings[body]['text']):]])
+        unchanged=apply_frontend_edits(out,scenes,{**edited,'edits':{}})
+        self.assertEqual(unchanged,out)
+        with self.assertRaises(UserError):
+            apply_frontend_edits(out,scenes,{**edited,'deck_id':'wrong-deck'})
+        with self.assertRaises(UserError):
+            apply_frontend_edits(out,scenes,{**edited,'edits':{'unknown':'new text'}})
+
+    def test_frontend_offline_css_license_and_escaping(self):
+        out=make_outline(self.doc,6,title='__CONFIG__ </script><script>window.pwned=1</script>')
+        scenes,theme=frontend_scenes(out,'electric-studio')
+        cache={}
+        css=font_css(scenes,cache)
+        result=frontend_html(scenes,theme,css).decode()
+        self.assertIn((ASSETS/'viewport-base.css').read_text('utf-8'),result)
+        self.assertIn('data:font/woff2;base64,',result)
+        self.assertNotIn('<script>window.pwned=1</script>',result)
+        self.assertIn('Copyright (c) 2025 Zara Zhang',result)
+        self.assertNotIn('src="https://',result)
+        self.assertEqual(font_css(scenes,cache),css)
+
     def test_ai_mock_only_no_network(self):
         out = make_outline(self.doc, 6)
         payload = json.dumps({"choices":[{"message":{"content":json.dumps(out)}}]}).encode()
@@ -281,6 +346,13 @@ class PipelineTests(unittest.TestCase):
         next(b for b in at.button if b.label=='为全部页面重新推荐版式（保留文字）').click().run()
         self.assertTrue(all(s.value=='auto' for s in at.selectbox if s.label=='版式'))
         self.assertEqual(next(t for t in at.text_input if t.label=='封面标题').value,'修改后的课堂汇报')
+        next(r for r in at.radio if r.label=='选择动态演示风格').set_value('signal').run()
+        self.assertFalse(at.exception,str(at.exception))
+        self.assertFalse(at.error,[e.value for e in at.error])
+        next(b for b in at.button if b.label=='生成对应的可编辑 PPTX 和文稿包').click().run()
+        self.assertFalse(at.exception,str(at.exception))
+        self.assertFalse(at.error,[e.value for e in at.error])
+        self.assertTrue(at.session_state['frontend_output']['pptx'].startswith(b'PK'))
 
 
 if __name__ == "__main__":

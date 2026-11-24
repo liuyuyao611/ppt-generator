@@ -31,7 +31,7 @@ def scene_svg(scene):
             points=f"{x},{y} {x+w*.55},{y} {x+w},{y+h/2} {x+w*.55},{y+h} {x},{y+h} {x+w*.45},{y+h/2}"
             parts.append(f'<polygon id="{e["id"]}" points="{points}" fill="{escape(e["fill"])}"/>')
         elif e["kind"] == "text":
-            family = escape(scene["font"], quote=True)
+            family = escape(e.get('font',scene["font"]), quote=True)
             align=e.get("align","left")
             x=e["x"]+(e["w"]/2 if align=="center" else e["w"] if align=="right" else 0)
             anchor={"left":"start","center":"middle","right":"end"}[align]
@@ -53,11 +53,13 @@ def scene_svg(scene):
 def export_pptx(scenes, title="文档汇报"):
     prs = Presentation()
     prs.slide_width = Inches(13.333333)
-    prs.slide_height = Inches(13.333333 * scenes[0]["height"] / 1280)
+    prs.slide_height = Inches(13.333333 * scenes[0]["height"] / scenes[0]['width'])
     prs.core_properties.title = title
     prs.core_properties.author = "SlideCraft"
+    units_per_inch=scenes[0]['width']/13.333333
+    points_per_unit=72/units_per_inch
     def inch(value):
-        return Inches(value / 96)
+        return Inches(value / units_per_inch)
 
     for scene in scenes:
         slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -91,11 +93,11 @@ def export_pptx(scenes, title="文档汇报"):
                     p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
                     p.space_before = Pt(0)
                     p.space_after = Pt(0)
-                    p.line_spacing = Pt(e["size"] * e["line_height"] * .75)
+                    p.line_spacing = Pt(e["size"] * e["line_height"] * points_per_unit)
                     p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[e["align"]]
                     p.text = line
-                    p.font.name = scene["font"]
-                    p.font.size = Pt(e["size"] * .75)
+                    p.font.name = e.get('font',scene["font"])
+                    p.font.size = Pt(e["size"] * points_per_unit)
                     p.font.bold = e["bold"]
                     p.font.color.rgb = RGBColor.from_string(e["color"].lstrip("#"))
                     # Set East Asian font explicitly for Chinese text in Office.
@@ -103,7 +105,7 @@ def export_pptx(scenes, title="文档汇报"):
                     default = props.find("{http://schemas.openxmlformats.org/drawingml/2006/main}defRPr")
                     if default is not None:
                         ea = OxmlElement("a:ea")
-                        ea.set("typeface", scene["font"])
+                        ea.set("typeface", 'Noto Sans SC' if scene.get('frontend_theme') else scene["font"])
                         default.append(ea)
             shape.name = e["id"]
         slide.notes_slide.notes_text_frame.text = scene.get("notes", "")

@@ -1,0 +1,30 @@
+{
+  "NotoSansSC": {
+    "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+    "upstream_git_blob": "fb0637bafbcd804fe32152370a1225990745b4bc",
+    "source_sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+    "file": "NotoSansSC.ttf",
+    "license": "NotoSansSC-OFL.txt"
+  },
+  "Manrope": {
+    "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/manrope/Manrope%5Bwght%5D.ttf",
+    "upstream_git_blob": "75274da58537d6123b14f2cd0c355ad4681fc2b3",
+    "source_sha256": "3ae11c49db0455a3cc33e37d380f20fdb8c7f8b41dc07625c177e3d87a9d6ae6",
+    "file": "Manrope.woff2",
+    "license": "Manrope-OFL.txt"
+  },
+  "DMSans": {
+    "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/dmsans/DMSans%5Bopsz%2Cwght%5D.ttf",
+    "upstream_git_blob": "c672f98060af9b2c85fca704ebd5ad9a8717c1df",
+    "source_sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d",
+    "file": "DMSans.woff2",
+    "license": "DMSans-OFL.txt"
+  },
+  "SourceSerif4": {
+    "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/sourceserif4/SourceSerif4%5Bopsz%2Cwght%5D.ttf",
+    "upstream_git_blob": "40bbb58cb58e893ad0470f0bb291e096c73d3554",
+    "source_sha256": "97b2d4da6e3cb494b5a1e66ae176914d852ccabef49e0c02c0df25f3e39aca0b",
+    "file": "SourceSerif4.woff2",
+    "license": "SourceSerif4-OFL.txt"
+  }
+}

@@ -12,7 +12,7 @@ from renderer import scene_svg
 from skill_audit import audit
 
 
-def scene_html(scene):
+def scene_html(scene,interactive=False):
     esc=html.escape
     elements=[]
     for e in scene["elements"]:
@@ -24,23 +24,26 @@ def scene_html(scene):
             elements.append(f'<div id="{identifier}" aria-hidden="true" style="{position}background:{e["fill"]};border-radius:{12 if e.get("radius") else 0}px;{border}{clip}"></div>')
         elif e["kind"]=="text":
             tag="h2" if e.get("role")=="title" else "p"
-            font=re.sub(r"[^a-zA-Z0-9 \-\u4e00-\u9fff]", "", scene["font"])
-            css=f"margin:0;font-family:'{font}',sans-serif;font-size:{e['size']}px;font-weight:{700 if e['bold'] else 400};line-height:{e['line_height']};white-space:pre;text-align:{e['align']};color:{e['color']};"
-            elements.append(f'<{tag} id="{identifier}" style="{position}{css}">{esc(e["text"])}</{tag}>')
+            font=re.sub(r"[^a-zA-Z0-9 \-\u4e00-\u9fff]", "", e.get('font',scene["font"]))
+            css=f"margin:0;font-family:'{font}','SlideCraft CJK',sans-serif;font-size:{e['size']}px;font-weight:{700 if e['bold'] else 400};line-height:{e['line_height']};white-space:pre;text-align:{e['align']};color:{e['color']};"
+            attributes=''
+            if interactive and e.get('role') in {'title','body','subtitle','caption'}:
+                attributes=f' class="reveal editable" data-edit-id="{identifier}" data-role="{e["role"]}"'
+            elements.append(f'<{tag} id="{identifier}"{attributes} style="{position}{css}">{esc(e["text"])}</{tag}>')
         else:
             b64=base64.b64encode(e["data"]).decode()
             elements.append(f'<img id="{identifier}" alt="用户选择的原图" src="data:image/jpeg;base64,{b64}" style="{position}object-fit:contain">')
-    return f'<section class="slide" aria-label="{esc(scene["title"],quote=True)}" style="width:1280px;height:{scene["height"]}px;background:{scene["bg"]};">'+"".join(elements)+"</section>"
+    return f'<section class="slide" aria-label="{esc(scene["title"],quote=True)}" style="width:{scene["width"]}px;height:{scene["height"]}px;background:{scene["bg"]};">'+"".join(elements)+"</section>"
 
 
 def deck_html(scenes,title):
-    slides="".join('<div class="slide-wrap" style="aspect-ratio:1280/'+str(s["height"])+'">'+scene_html(s)+"</div>" for s in scenes)
+    slides="".join('<div class="slide-wrap" style="aspect-ratio:'+str(s['width'])+'/'+str(s["height"])+'">'+scene_html(s)+"</div>" for s in scenes)
     return ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)}</title><style>body{{margin:0;background:#e8edf6;font-family:sans-serif}}'
             'main{max-width:1280px;margin:24px auto;padding:0 16px}.slide-wrap{position:relative;overflow:hidden;margin-bottom:24px;box-shadow:0 6px 24px #17243d14}'
             '.slide{position:absolute;transform-origin:top left;overflow:hidden}p,h2{overflow:visible}@media print{body{background:white}main{margin:0;padding:0}.slide-wrap{break-after:page;margin:0;box-shadow:none}}'
             '</style></head><body><main>'+slides+'</main><script>'
-            'function fit(){document.querySelectorAll(".slide-wrap").forEach(w=>{w.firstElementChild.style.transform="scale("+w.clientWidth/1280+")"})}addEventListener("resize",fit);fit();'
+            'function fit(){document.querySelectorAll(".slide-wrap").forEach(w=>{w.firstElementChild.style.transform="scale("+w.clientWidth/parseFloat(w.firstElementChild.style.width)+")"})}addEventListener("resize",fit);fit();'
             '</script></body></html>').encode('utf-8')
 
 

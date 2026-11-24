@@ -18,6 +18,7 @@ from renderer import build_scenes, export_pptx, safe_filename, scene_svg
 from layouts import LAYOUT_LABELS, RELATION_LABELS, recommend_layout
 from exports import audit_native, deck_html, export_bundle
 from preview import preview_html
+from frontend_ui import render_frontend
 
 ROOT = Path(__file__).parent
 st.set_page_config(page_title="SlideCraft · 文档生成 PPT", page_icon="📑", layout="wide")
@@ -36,7 +37,8 @@ def signature(value):
 
 def reset_result():
     for key in list(st.session_state):
-        if key in {"outline", "doc", "assets", "export", "export_sig", "export_check", "result_input_sig"} or key.startswith("edit_"):
+        if key in {"outline", "doc", "assets", "export", "export_sig", "export_check", "result_input_sig",
+                   "frontend_output", "frontend_font_cache", "frontend_theme_choice"} or key.startswith("edit_"):
             del st.session_state[key]
 
 
@@ -66,7 +68,7 @@ def main():
     [data-testid="stMetric"] {background:white;border:1px solid #E1E6F1;border-radius:12px;padding:.8rem 1rem}
     div.stButton>button[kind="primary"] {border-radius:9px}
     </style>
-    <div class="brand">SLIDECRAFT / 多版式汇报 · V2</div>
+    <div class="brand">SLIDECRAFT / 多版式汇报 · V3 · FRONTEND SLIDES</div>
     """, unsafe_allow_html=True)
     st.title("把一份文档，变成一场清晰的汇报。")
     st.markdown('<p class="intro">上传文档，整理讲述顺序，配上你的图片与风格。最终下载可继续编辑的 PowerPoint。</p>'
@@ -223,7 +225,7 @@ def main():
     metrics[0].metric("原文内容块", len(doc.blocks))
     metrics[1].metric("大纲页数（含封面）", len(outline["slides"]) + 1)
     metrics[2].metric("可选图片", len(assets))
-    edit, preview, source = st.tabs(["编辑大纲", "版式预览与下载", "原文与来源"])
+    edit, preview, frontend, source = st.tabs(["编辑大纲", "版式预览与下载", "动态演示 · Frontend Slides", "原文与来源"])
     rev = st.session_state.revision
     with edit:
         st.caption("编辑即时用于预览。长要点自动拆为续页，下载页数可能增加。请保存下载结果，刷新或休眠后会话可能丢失。")
@@ -320,6 +322,8 @@ def main():
             st.error(str(exc))
         except Exception:
             st.error("预览或导出失败，请检查页面内容与图片后重试。")
+    with frontend:
+        render_frontend(outline,doc,assets)
 
 
 if __name__ == "__main__":

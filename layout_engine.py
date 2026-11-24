@@ -116,7 +116,7 @@ def paginate(outline,style,images):
     """Continue long text onto new pages, keeping each body segment in one text object."""
     height=960 if style["ratio"]=="4:3" else 720
     pages,previous=[],None
-    for slide in outline["slides"]:
+    for slide_index,slide in enumerate(outline["slides"]):
         slide=copy.deepcopy(slide)
         layout,reason=resolve_layout(slide,images,previous)
         previous=layout
@@ -161,6 +161,7 @@ def paginate(outline,style,images):
         for i,items in enumerate(chunks):
             page=copy.deepcopy(slide)
             page.update(title=slide["title"]+("（续）" if i else ""),layout=layout,layout_reason=reason,items=items,top=top)
+            page['origin_slide']=slide.get('_origin_slide',slide_index)
             pages.append(page)
     if len(pages)>100:
         raise UserError("排版后超过 100 页，请缩短要点或拆分汇报。")
@@ -279,6 +280,7 @@ def build_scenes(outline,style,images=None,sources=None):
                 rect(s,x-25,y+10,6,16,style["accent"])
             body=text(s,"\n".join(item["lines"]),x,y,w,item["size"],color,bold,role="body")
             body.update(original_text=item["text"],bullet_id=item["bullet_id"])
+            body['origin_bullet']=page.get('_origin_bullets',list(range(len(page['bullets']))))[item['bullet_id']]
         rect(s,72,height-64,1136,1,tint(style["primary"],.8))
         ids=page.get("source_ids",[])
         label="来源："+" · ".join(ids[:10])+(f" 等 {len(ids)} 处" if len(ids)>10 else "")
@@ -289,6 +291,7 @@ def build_scenes(outline,style,images=None,sources=None):
         s["notes"]=(f"【本页目的】{page.get('purpose','')}\n【内容关系】{page.get('relationship','parallel')}\n"
                     +page.get("notes","")+"\n\n【图片出处】\n"+image_source+"\n\n【原文定位】\n"+refs)
         s["source_ids"]=ids
+        s['origin_slide']=page['origin_slide']
         scenes.append(s)
     for page_index,s in enumerate(scenes,1):
         for element_index,e in enumerate(s["elements"],1):
