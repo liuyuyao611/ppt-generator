@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from core import (DEFAULT_STYLE, MAX_IMAGES, MAX_IMAGE_BYTES, UserError, ai_outline,
                   extract_style, make_outline, normalize_style, normalized_image,
@@ -16,6 +17,7 @@ from core import (DEFAULT_STYLE, MAX_IMAGES, MAX_IMAGE_BYTES, UserError, ai_outl
 from renderer import build_scenes, export_pptx, safe_filename, scene_svg
 from layouts import LAYOUT_LABELS, RELATION_LABELS, recommend_layout
 from exports import audit_native, deck_html, export_bundle
+from preview import preview_html
 
 ROOT = Path(__file__).parent
 st.set_page_config(page_title="SlideCraft · 文档生成 PPT", page_icon="📑", layout="wide")
@@ -277,13 +279,8 @@ def main():
             scenes = build_scenes(outline, style, assets, source_map)
             diversity = len({s["layout"] for s in scenes if s["layout"] != "cover"})
             st.caption(f"实际排版 {len(scenes)} 页 · 使用 {diversity} 种内容版式。字体显示取决于打开设备是否安装该字体。")
-            index = st.selectbox("选择预览页面", range(len(scenes)),
-                                format_func=lambda i: f"{i+1:02d} · {scenes[i]['title']}", key=f"preview_{rev}")
-            if index >= len(scenes):
-                index = 0
-            st.image(scene_svg(scenes[index]).decode("utf-8"), use_container_width=True)
-            selected = scenes[index]
-            st.caption("本页版式：" + LAYOUT_LABELS.get(selected["layout"], "封面") + " · " + selected.get("layout_reason", ""))
+            components.html(preview_html(scenes, rev), height=700 if style["ratio"] == "4:3" else 640,
+                            scrolling=False)
             with st.expander("查看整套缩略图，对比页面节奏"):
                 group = st.selectbox("缩略图分组", range(max(1, (len(scenes)+11)//12)),
                                      format_func=lambda n: f"第 {n*12+1}–{min(n*12+12,len(scenes))} 页")
