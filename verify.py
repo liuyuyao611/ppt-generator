@@ -210,6 +210,7 @@ class PipelineTests(unittest.TestCase):
         markup=deck_html(scenes,out['title']).decode()
         self.assertNotIn('<script>bad()',markup)
         self.assertEqual(markup.count('<section class="slide"'),len(scenes))
+        del self.doc.metadata  # Simulate a session opened before the V2 metadata field existed.
         for include in (False,True):
             bundle=export_bundle(scenes,out,DEFAULT_STYLE,self.doc,pptx,check,include)
             with zipfile.ZipFile(io.BytesIO(bundle)) as z:

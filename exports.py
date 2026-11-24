@@ -63,7 +63,7 @@ def audit_native(scenes,pptx):
 
 
 def evidence_record(doc,outline):
-    return {'document':doc.metadata,'blocks':doc.blocks,
+    return {'document':getattr(doc,'metadata',{'filename':doc.title}),'blocks':doc.blocks,
         'extracted_images':[{k:i.get(k,'') for k in ('name','source','pdf_page','width','height')} for i in doc.images],
         'pages':[
         {k:s.get(k,'') for k in ('title','purpose','relationship','source_ids','image','image_caption')}
