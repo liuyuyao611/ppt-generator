@@ -33,10 +33,40 @@ from personal_template import PERSONAL_STYLE, load_personal_template
 from content_structure import diagram_for, rank_excerpts
 from concept_image import IMAGE_ENDPOINT, generate_concept_image
 
+from pdf_text import text_problem, extract_pages, PdfTextError, prose_paragraphs
+
 ROOT = Path(__file__).parent
 
 
 class PipelineTests(unittest.TestCase):
+    def test_pdf_garbled_font_fallback_and_failure(self):
+        from types import SimpleNamespace
+        bad = ''.join(chr(i) for i in range(0x400, 0x1200, 7))
+        reader = SimpleNamespace(pages=[SimpleNamespace(extract_text=lambda: bad)])
+        self.assertTrue(text_problem(bad))
+        good = '中文正文恢复后应保留原始数据、单位和方法，避免生成乱码。'
+        with patch('pdf_text.poppler_pages', return_value=[good]):
+            pages, diagnostics = extract_pages(reader, b'fixture')
+        self.assertEqual(pages, [good])
+        self.assertEqual(diagnostics[0]['engine'], 'Poppler')
+        with patch('pdf_text.poppler_pages', side_effect=PdfTextError('unavailable')):
+            with self.assertRaisesRegex(PdfTextError, 'OCR'):
+                extract_pages(reader, b'fixture')
+        for text in ['正常中文与 English，参数 α、β 和 σ²。',
+                     'العربية هي لغة جميلة تستخدم في البحث العلمي',
+                     'The measured value is α = 0.5 with uncertainty σ = 0.1.']:
+            self.assertFalse(text_problem(text))
+
+    def test_pdf_formula_fragments_stay_in_notes(self):
+        raw = '研究问题需要通过独立实验进行验证。\nA = (1 - α)max(dark) +\n)\n\nThe proposed method improves image recon-\nstruction using an independent reference.\n'
+        doc = SourceDoc('paper', [{'id':'S1','heading':'第 1 页','source':'PDF 第 1 页', 'pdf_page':1,'text':raw}])
+        out = make_outline(doc, 5)
+        visible = '\n'.join(s['title']+'\n'+'\n'.join(s['bullets']) for s in out['slides'])
+        self.assertNotIn('max(dark)', visible)
+        self.assertIn('reconstruction', visible)
+        self.assertIn(raw, out['slides'][0]['notes'])
+        self.assertNotIn(')', prose_paragraphs(raw))
+
     def setUp(self):
         self.doc = read_document("sample.md", (
             "# 传感器汇报\n\n## 背景\n腕关节传感器用于记录与运动相关的信号。"

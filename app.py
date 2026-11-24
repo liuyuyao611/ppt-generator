@@ -239,8 +239,10 @@ def main():
                                             personal_assets=assets)
         except UserError as exc:
             st.error(str(exc))
+            return
         except Exception:
             st.error("处理未完成，请检查文件后重试。")
+            return
 
     if "outline" not in st.session_state:
         st.divider()
@@ -328,6 +330,13 @@ def main():
                     st.caption("原文定位：" + " · ".join(slide["source_ids"]))
     with source:
         if not personal or active == "原文与来源":
+            diagnostics = doc.metadata.get("pdf_extraction", [])
+            if diagnostics:
+                st.caption("PDF 文字已通过编码检查。请展开原文核对，尤其留意公式、表格和双栏阅读顺序。")
+                with st.expander("查看逐页文字识别结果"):
+                    st.dataframe([{"PDF 页码": d["page"], "读取方式": "备用解析" if d["engine"] == "Poppler" else "文字层",
+                                   "文字数": len(doc.blocks[d["page"]-1]["text"]) if len(doc.blocks) == len(diagnostics) else "见原文"}
+                                  for d in diagnostics], hide_index=True, use_container_width=True)
             for block in doc.blocks:
                 with st.expander(f"[{block['id']}] {block['heading']} · {block['source']}"):
                     st.text(block["text"])

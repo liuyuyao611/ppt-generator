@@ -19,6 +19,8 @@ from pypdf import PdfReader
 
 from layouts import LAYOUT_LABELS
 from content_structure import diagram_for, rank_excerpts
+from pdf_text import (PdfTextError, extract_pages, prose_paragraphs,
+                      running_lines, margin_key)
 
 MAX_FILE = 20 * 1024 * 1024
 MAX_TEXT = 100_000
@@ -136,9 +138,18 @@ def read_document(name: str, data: bytes, extract_images=False) -> SourceDoc:
                 raise UserError("PDF 超过 120 页，请先选取需要汇报的部分。")
             if reader.metadata and reader.metadata.title:
                 metadata["pdf_title"] = str(reader.metadata.title)
+            try:
+                page_texts, diagnostics = extract_pages(reader, data)
+            except PdfTextError as exc:
+                raise UserError(str(exc)) from exc
+            metadata["pdf_extraction"] = diagnostics
+            metadata["pdf_read_version"] = 1
+            recovered = [str(d["page"]) for d in diagnostics if d["engine"] == "Poppler"]
+            if recovered:
+                warnings.append(f"已使用备用解析恢复第 {', '.join(recovered)} 页文字；请在“原文与来源”核对。")
             blank = []
             for i, page in enumerate(reader.pages, 1):
-                text = page.extract_text() or ""
+                text = page_texts[i-1]
                 if len(text.strip()) < 12:
                     blank.append(i)
                 add(text, f"PDF 第 {i} 页", f"第 {i} 页", page=i)
@@ -224,13 +235,22 @@ def make_outline(doc: SourceDoc, pages=10, title="", subtitle=""):
     content_count = max(1, min(28, pages - 2))
     sections = []
     is_pdf = all(b.get("pdf_page") for b in doc.blocks)
+    margins = running_lines([b["text"] for b in doc.blocks]) if is_pdf else set()
     for block in doc.blocks:
         section_title = doc.title if is_pdf else block["heading"]
-        units = [(block, sentence) for sentence in split_sentences(block["text"])]
+        text = block["text"]
+        if is_pdf:
+            text = "\n".join(line if margin_key(line) not in margins else ""
+                             for line in text.splitlines())
+            text = "\n".join(prose_paragraphs(text))
+        sentences = split_sentences(text)
+        units = [(block, sentence) for sentence in sentences]
         if sections and sections[-1]["title"] == section_title:
             sections[-1]["units"].extend(units)
         elif units:
             sections.append({"title": section_title, "units": units, "count": 1})
+    if not sections:
+        raise UserError("没有识别到可用于大纲的连续正文。请先 OCR 或粘贴正文；公式需对照原 PDF 核对。")
     if len(sections) > 28:
         raise UserError("正文包含超过 28 个章节，请拆分汇报，以免把不同章节混在一页。")
     while sum(s["count"] for s in sections) < content_count:
@@ -254,8 +274,13 @@ def make_outline(doc: SourceDoc, pages=10, title="", subtitle=""):
             bullets = [sentences[0]]
         page_title = section_title
         if page_title in {doc.title, "输入文字"}:
-            page_title = sentences[0][:36]
-        notes = "\n".join(sentences)
+            candidate = next((s for s in sentences if len(s) >= 18 and "=" not in s), "") if is_pdf else sentences[0]
+            page_title = candidate[:36] or f"原文要点 · 第 {len(slides)+1} 部分"
+        notes = ("【PDF 原文：含未上屏的公式与片段，请对照原页核对】\n" + "\n\n".join(
+            f"[{sid}] {next(b['text'] for b, _ in group if b['id'] == sid)}" for sid in source_ids)
+            if is_pdf else "\n".join(sentences))
+        if len(sentences) > 4:
+            notes = "【规则分段：正文为原文摘选，完整段落如下】\n" + notes
         notes = ("【上屏要点来源】\n" + "\n".join(f"[{sid}] {value}" for sid, value in excerpts)
                  + "\n\n【本页原文摘录】\n" + notes)
         slides.append({"title": page_title[:100], "bullets": bullets,
@@ -263,6 +288,15 @@ def make_outline(doc: SourceDoc, pages=10, title="", subtitle=""):
                        "layout": "auto", "image": "", "image_caption": "",
                        "purpose": f"说明{page_title[:60]}",
                        "relationship": "sequence" if diagram_for({"bullets": bullets}) == "flow" else "parallel"})
+    if is_pdf:
+        # Pages containing only equations/captions are still retained verbatim.
+        used = {sid for slide in slides for sid in slide["source_ids"]}
+        for block in doc.blocks:
+            if block["id"] not in used:
+                nearest = min(slides, key=lambda s: min(abs(block["pdf_page"] - b["pdf_page"])
+                    for b in doc.blocks if b["id"] in s["source_ids"]))
+                nearest["source_ids"].append(block["id"])
+                nearest["notes"] += f"\n\n[{block['id']}] {block['text']}"
     # Summary is explicitly an extract rather than an invented research conclusion.
     summary = [s["bullets"][0] for s in slides if s["bullets"]]
     if len(summary) > 4:
@@ -271,8 +305,11 @@ def make_outline(doc: SourceDoc, pages=10, title="", subtitle=""):
                    "source_ids": list(dict.fromkeys(x for s in slides for x in s["source_ids"])),
                    "layout": "auto", "image": "", "image_caption": "",
                    "purpose": "回顾原文要点及适用边界", "relationship": "parallel"})
+    warnings = ["规则模式按章节分段摘选，不等同于 AI 理解；未上屏的文字保留在讲稿备注。章节较多时，优先保持章节完整，页数可超过目标。"]
+    if is_pdf:
+        warnings.append("PDF 已合并正文换行，独立公式、页眉和零散片段不作为要点；完整提取文字保留在原文与讲稿中，公式请对照原 PDF 核对。")
     return {"title": title or doc.title, "subtitle": subtitle, "mode": "规则分段",
-            "slides": slides, "warnings": ["规则模式按原文筛选要点，优先保留目标、方法、结果、数字和限制。讲稿备注提供上屏要点来源和本页原文摘录。章节较多时，页数可超过目标。"]}
+            "slides": slides, "warnings": warnings}
 
 
 def validate_outline(outline, valid_ids, *, personal=False):
