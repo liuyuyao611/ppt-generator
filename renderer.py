@@ -21,6 +21,8 @@ def scene_svg(scene):
     escape = html.escape
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{scene["width"]}" height="{scene["height"]}" viewBox="0 0 {scene["width"]} {scene["height"]}">',
              f'<rect width="100%" height="100%" fill="{escape(scene["bg"])}"/>']
+    if scene.get("backdrop"):
+        parts.append(f'<image width="100%" height="100%" href="{escape(scene["backdrop"], quote=True)}"/>')
     for e in scene["elements"]:
         if e["kind"] == "rect":
             stroke = f' stroke="{escape(e["stroke"])}" stroke-width="1"' if e.get("stroke") else ""
@@ -37,7 +39,15 @@ def scene_svg(scene):
             anchor={"left":"start","center":"middle","right":"end"}[align]
             parts.append(f'<text id="{e["id"]}" x="{x}" y="{e["y"]+e["size"]}" font-family="{family}, Noto Sans CJK SC, sans-serif" font-size="{e["size"]}" font-weight="{700 if e["bold"] else 400}" text-anchor="{anchor}" fill="{escape(e["color"])}">')
             lines=e["text"].split("\n")
-            if len(lines)==1:
+            if e.get("runs"):
+                for j, runs in enumerate(e["runs"]):
+                    baseline = e["y"] + e["size"] + j * e["size"] * e["line_height"]
+                    parts.append(f'<tspan x="{x}" y="{baseline}">')
+                    for run in runs:
+                        parts.append(f'<tspan font-weight="{700 if run["bold"] else 400}" fill="{escape(run["color"])}">'
+                                     f'{escape(run["text"])}</tspan>')
+                    parts.append("</tspan>")
+            elif len(lines)==1:
                 parts.append(escape(lines[0]))
             else:
                 for j, line in enumerate(lines):
@@ -50,21 +60,36 @@ def scene_svg(scene):
     return "".join(parts).encode("utf-8")
 
 
-def export_pptx(scenes, title="文档汇报"):
-    prs = Presentation()
-    prs.slide_width = Inches(13.333333)
-    prs.slide_height = Inches(13.333333 * scenes[0]["height"] / scenes[0]['width'])
+def export_pptx(scenes, title="文档汇报", *, template=None):
+    if template is None:
+        prs = Presentation()
+        prs.slide_width = Inches(13.333333)
+        prs.slide_height = Inches(13.333333 * scenes[0]["height"] / scenes[0]['width'])
+        cover_layout = body_layout = prs.slide_layouts[6]
+    else:
+        prs = Presentation(io.BytesIO(template.data))
+        cover_layout, body_layout = (prs.slides[i].slide_layout for i in range(2))
+        # The examples identify native layouts. Removing the slide relationships keeps
+        # layout/master parts and avoids carrying example content and speaker notes.
+        ids = prs.slides._sldIdLst
+        for reference in list(ids):
+            prs.part.drop_rel(reference.rId)
+            ids.remove(reference)
     prs.core_properties.title = title
     prs.core_properties.author = "SlideCraft"
-    units_per_inch=scenes[0]['width']/13.333333
+    units_per_inch=scenes[0]['width']/prs.slide_width.inches
     points_per_unit=72/units_per_inch
     def inch(value):
         return Inches(value / units_per_inch)
 
     for scene in scenes:
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        slide.background.fill.solid()
-        slide.background.fill.fore_color.rgb = RGBColor.from_string(scene["bg"].lstrip("#"))
+        slide = prs.slides.add_slide(cover_layout if scene["layout"] == "cover" else body_layout)
+        if template is None:
+            slide.background.fill.solid()
+            slide.background.fill.fore_color.rgb = RGBColor.from_string(scene["bg"].lstrip("#"))
+        else:
+            for placeholder in list(slide.placeholders):
+                placeholder._element.getparent().remove(placeholder._element)
         for e in scene["elements"]:
             if e["kind"] == "image":
                 shape = slide.shapes.add_picture(io.BytesIO(e["data"]), inch(e["x"]), inch(e["y"]), inch(e["w"]), inch(e["h"]))
@@ -95,7 +120,14 @@ def export_pptx(scenes, title="文档汇报"):
                     p.space_after = Pt(0)
                     p.line_spacing = Pt(e["size"] * e["line_height"] * points_per_unit)
                     p.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[e["align"]]
-                    p.text = line
+                    if e.get("runs"):
+                        for span in e["runs"][j]:
+                            run = p.add_run()
+                            run.text = span["text"]
+                            run.font.bold = span["bold"]
+                            run.font.color.rgb = RGBColor.from_string(span["color"].lstrip("#"))
+                    else:
+                        p.text = line
                     p.font.name = e.get('font',scene["font"])
                     p.font.size = Pt(e["size"] * points_per_unit)
                     p.font.bold = e["bold"]
