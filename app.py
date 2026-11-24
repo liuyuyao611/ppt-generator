@@ -4,7 +4,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import hmac
-import io
 import json
 import os
 from pathlib import Path
@@ -15,6 +14,8 @@ from core import (DEFAULT_STYLE, MAX_IMAGES, MAX_IMAGE_BYTES, UserError, ai_outl
                   extract_style, make_outline, normalize_style, normalized_image,
                   read_document, validate_outline)
 from renderer import build_scenes, export_pptx, safe_filename, scene_svg
+from layouts import LAYOUT_LABELS, RELATION_LABELS, recommend_layout
+from exports import audit_native, deck_html, export_bundle
 
 ROOT = Path(__file__).parent
 st.set_page_config(page_title="SlideCraft · 文档生成 PPT", page_icon="📑", layout="wide")
@@ -33,7 +34,7 @@ def signature(value):
 
 def reset_result():
     for key in list(st.session_state):
-        if key in {"outline", "doc", "assets", "export", "export_sig", "result_input_sig"} or key.startswith("edit_"):
+        if key in {"outline", "doc", "assets", "export", "export_sig", "export_check", "result_input_sig"} or key.startswith("edit_"):
             del st.session_state[key]
 
 
@@ -63,7 +64,7 @@ def main():
     [data-testid="stMetric"] {background:white;border:1px solid #E1E6F1;border-radius:12px;padding:.8rem 1rem}
     div.stButton>button[kind="primary"] {border-radius:9px}
     </style>
-    <div class="brand">SLIDECRAFT / 文档成稿</div>
+    <div class="brand">SLIDECRAFT / 多版式汇报 · V2</div>
     """, unsafe_allow_html=True)
     st.title("把一份文档，变成一场清晰的汇报。")
     st.markdown('<p class="intro">上传文档，整理讲述顺序，配上你的图片与风格。最终下载可继续编辑的 PowerPoint。</p>'
@@ -74,7 +75,7 @@ def main():
         title = st.text_input("汇报标题（可选）", placeholder="默认使用文档标题", max_chars=120)
         subtitle = st.text_input("副标题 / 姓名 / 课程", placeholder="例如：张同学 · 课程文献汇报", max_chars=150)
         pages = st.slider("目标总页数", 5, 24, 10)
-        st.caption("含封面。内容较短时减少页数，长要点会自动分到续页。")
+        st.caption("含封面。优先保持章节完整，长要点自动分为续页，实际页数可超过目标。")
         mode = st.radio("内容整理方式", ["规则分段 · 免费", "AI 整理 · 需要 API"])
         api_key, model, consent = "", "", False
         if mode.startswith("AI"):
@@ -89,9 +90,10 @@ def main():
             st.caption("AI 调用可能产生服务商费用；上传的图片不发送给模型。")
         st.divider()
         st.subheader("页面风格")
-        preset = st.selectbox("配色", ["学术蓝", "森林绿", "深紫", "暖橙"])
+        preset = st.selectbox("配色", ["学术蓝", "组会蓝橙", "森林绿", "深紫", "暖橙"])
         styles = {
             "学术蓝": DEFAULT_STYLE,
+            "组会蓝橙": DEFAULT_STYLE | {"name":"组会蓝橙", "primary":"#073B71", "accent":"#E98429", "background":"#FFFFFF", "text":"#111111", "muted":"#4B4B4B"},
             "森林绿": DEFAULT_STYLE | {"name":"森林绿", "primary":"#126254", "accent":"#C18A23"},
             "深紫": DEFAULT_STYLE | {"name":"深紫", "primary":"#55349A", "accent":"#C74E8D"},
             "暖橙": DEFAULT_STYLE | {"name":"暖橙", "primary":"#9F411E", "accent":"#147E9A"},
@@ -151,6 +153,8 @@ def main():
                                   max_chars=100_000, key="pasted")
         supplements = st.file_uploader("补充图片（可多选）", type=["png", "jpg", "jpeg"],
                                        accept_multiple_files=True, key="pictures")
+        extract_images = st.checkbox("提取 PDF 内嵌原图，供逐页手动选图", value=True)
+        st.caption("新版按内容推荐九种版式；图片不会被随机配给页面。")
     with right:
         st.subheader("先看一次完整流程")
         st.write("没有现成材料也可以先试用。")
@@ -162,7 +166,7 @@ def main():
     content_name = uploaded.name if uploaded else "输入文字.md"
     image_identity = [(u.name, hashlib.sha256(u.getvalue()).hexdigest()) for u in supplements]
     input_sig = signature([source_mode, content_name, hashlib.sha256(content_bytes).hexdigest(),
-                           image_identity, title, subtitle, pages, mode])
+                           image_identity, title, subtitle, pages, mode, extract_images])
     generate = st.button("生成可编辑大纲", type="primary", use_container_width=True)
     if generate or demo:
         try:
@@ -175,7 +179,7 @@ def main():
                     demo_text = (ROOT / "examples" / "腕关节传感器.md").read_text("utf-8")
                     doc = read_document("腕关节传感器.md", demo_text.encode())
                 else:
-                    doc = read_document(content_name, content_bytes)
+                    doc = read_document(content_name, content_bytes, extract_images=extract_images)
                 assets = {}
                 extra_images = [] if demo else supplements
                 if len(doc.images) + len(extra_images) > MAX_IMAGES:
@@ -221,6 +225,10 @@ def main():
     rev = st.session_state.revision
     with edit:
         st.caption("编辑即时用于预览。长要点自动拆为续页，下载页数可能增加。请保存下载结果，刷新或休眠后会话可能丢失。")
+        def auto_layouts():
+            for i in range(len(outline["slides"])):
+                st.session_state[f"edit_{rev}_{i}_layout"] = "auto"
+        st.button("为全部页面重新推荐版式（保留文字）", use_container_width=True, on_click=auto_layouts)
         outline["title"] = st.text_input("封面标题", outline["title"], max_chars=120, key=f"edit_{rev}_deck_title")
         outline["subtitle"] = st.text_input("封面副标题", outline.get("subtitle", ""), max_chars=150, key=f"edit_{rev}_subtitle")
         for i, slide in enumerate(outline["slides"]):
@@ -230,14 +238,25 @@ def main():
                 body = st.text_area("要点（每行一条，最多 6 条）", "\n".join(slide["bullets"]),
                                     height=150, key=prefix+"_body")
                 slide["bullets"] = [s.strip() for s in body.splitlines() if s.strip()]
+                slide["purpose"] = st.text_input("本页目的", slide.get("purpose", ""), max_chars=180, key=prefix+"_purpose")
+                relations = list(RELATION_LABELS)
+                relation = slide.get("relationship", "parallel")
+                slide["relationship"] = st.selectbox("内容关系（必须有原文依据）", relations,
+                    index=relations.index(relation) if relation in relations else 0,
+                    format_func=RELATION_LABELS.get, key=prefix+"_relationship")
                 c1, c2 = st.columns(2)
-                layouts = ["bullets", "columns", "image"]
-                labels = {"bullets":"重点列表", "columns":"双栏要点", "image":"图文并排"}
-                slide["layout"] = c1.selectbox("版式", layouts, format_func=labels.get, key=prefix+"_layout")
+                layouts = list(LAYOUT_LABELS)
+                choice = slide.get("layout", "auto")
+                slide["layout"] = c1.selectbox("版式", layouts, index=layouts.index(choice) if choice in layouts else 0,
+                                              format_func=LAYOUT_LABELS.get, key=prefix+"_layout")
                 image_names = [""] + list(assets)
                 slide["image"] = c2.selectbox("配图", image_names, format_func=lambda n: n or "不使用图片", key=prefix+"_image")
-                if slide["image"] and slide["layout"] != "image":
-                    st.caption("已选图片；将版式改为“图文并排”后显示。")
+                slide["image_caption"] = st.text_input("图片出处 / 图号 / PDF 页码", slide.get("image_caption", ""),
+                    max_chars=200, placeholder="只填写已核对的来源；未知图号请留空", key=prefix+"_caption")
+                recommended, reason = recommend_layout(slide, assets)
+                st.caption(f"内容推荐：{LAYOUT_LABELS[recommended]} · {reason}")
+                if slide["image"] and slide["layout"] not in {"auto", "image", "literature"}:
+                    st.caption("已选图片；选择“自动推荐”“图文并排”或“文献概览”后显示。")
                 if slide["layout"] == "image" and not slide["image"]:
                     st.caption("请选择配图，未选择时按重点列表排版。")
                 slide["notes"] = st.text_area("讲稿备注（保存到 PPT 备注栏）", slide.get("notes", ""), height=100, key=prefix+"_notes")
@@ -256,26 +275,50 @@ def main():
             style = normalize_style(style)
             source_map = {b["id"]: f"{b['heading']} · {b['source']}" for b in doc.blocks}
             scenes = build_scenes(outline, style, assets, source_map)
-            st.caption(f"实际排版 {len(scenes)} 页。此处为版式预览；PowerPoint 中的字体显示取决于打开设备是否安装该字体。")
+            diversity = len({s["layout"] for s in scenes if s["layout"] != "cover"})
+            st.caption(f"实际排版 {len(scenes)} 页 · 使用 {diversity} 种内容版式。字体显示取决于打开设备是否安装该字体。")
             index = st.selectbox("选择预览页面", range(len(scenes)),
                                 format_func=lambda i: f"{i+1:02d} · {scenes[i]['title']}", key=f"preview_{rev}")
             if index >= len(scenes):
                 index = 0
             st.image(scene_svg(scenes[index]).decode("utf-8"), use_container_width=True)
+            selected = scenes[index]
+            st.caption("本页版式：" + LAYOUT_LABELS.get(selected["layout"], "封面") + " · " + selected.get("layout_reason", ""))
+            with st.expander("查看整套缩略图，对比页面节奏"):
+                group = st.selectbox("缩略图分组", range(max(1, (len(scenes)+11)//12)),
+                                     format_func=lambda n: f"第 {n*12+1}–{min(n*12+12,len(scenes))} 页")
+                columns = st.columns(3)
+                for n, s in enumerate(scenes[group*12:group*12+12]):
+                    with columns[n%3]:
+                        st.image(scene_svg(s).decode("utf-8"), use_container_width=True)
+                        st.caption(f"{group*12+n+1:02d} · {LAYOUT_LABELS.get(s['layout'], '封面')}")
             export_sig = signature([outline, style])
             if st.button("生成 PPTX 下载文件", type="primary", use_container_width=True):
                 with st.spinner("正在创建可编辑幻灯片…"):
-                    st.session_state.export = export_pptx(scenes, outline["title"])
+                    result = export_pptx(scenes, outline["title"])
+                    check = audit_native(scenes, result)
+                    if not check["passed"]:
+                        raise UserError("编辑性检查未通过：" + "；".join(check["errors"][:3]))
+                    st.session_state.export = result
+                    st.session_state.export_check = check
                     st.session_state.export_sig = export_sig
                 st.success("PPTX 已生成，可从下面下载。")
             if st.session_state.get("export_sig") == export_sig:
                 st.download_button("下载 PowerPoint", st.session_state.export, safe_filename(outline["title"]),
                                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                                    type="primary", use_container_width=True)
+                st.caption("已检查原生文字框与段落映射；尚未在 PowerPoint 中逐页核对显示效果。")
+                include_svg = st.checkbox("同时附加浏览器 SVG（多行使用 tspan；编辑请用原生 PPTX）", value=False)
+                bundle = export_bundle(scenes, outline, style, doc, st.session_state.export,
+                                       st.session_state.export_check, include_svg)
+                st.download_button("下载完整文稿包（PPTX + HTML + 大纲 + 来源 + 检查记录）", bundle,
+                                   "presentation-bundle.zip", "application/zip", use_container_width=True)
             elif st.session_state.get("export"):
                 st.caption("内容或样式已更新，请重新生成 PPTX 下载文件。")
             st.download_button("下载大纲与讲稿 JSON", json.dumps(outline, ensure_ascii=False, indent=2).encode(),
                                "outline.json", "application/json", use_container_width=True)
+            st.download_button("下载独立 HTML 幻灯片", deck_html(scenes, outline["title"]),
+                               "presentation.html", "text/html", use_container_width=True)
         except UserError as exc:
             st.error(str(exc))
         except Exception:

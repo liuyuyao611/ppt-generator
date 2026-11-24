@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import re
 import sys
 import unittest
 import urllib.error
@@ -12,11 +13,13 @@ from docx import Document
 from PIL import Image
 from pptx import Presentation
 from pypdf import PdfWriter
-from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject, NumberObject
 
 from core import (DEFAULT_STYLE, SourceDoc, UserError, ai_outline, extract_style,
                   make_outline, normalized_image, read_document, validate_outline)
 from renderer import build_scenes, export_pptx, scene_svg
+from layouts import LAYOUT_LABELS, recommend_layout
+from exports import audit_native, deck_html, export_bundle
 
 ROOT = Path(__file__).parent
 
@@ -82,6 +85,33 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(UserError):
             read_document("x.docx", b"broken zip")
 
+    def test_pdf_original_images_keep_page_provenance(self):
+        writer=PdfWriter()
+        page=writer.add_blank_page(612,792)
+        pic=io.BytesIO()
+        Image.new('RGB',(200,100),'orange').save(pic,'JPEG')
+        image=DecodedStreamObject()
+        image.set_data(pic.getvalue())
+        image.update({NameObject('/Type'):NameObject('/XObject'),NameObject('/Subtype'):NameObject('/Image'),
+            NameObject('/Width'):NumberObject(200),NameObject('/Height'):NumberObject(100),
+            NameObject('/ColorSpace'):NameObject('/DeviceRGB'),NameObject('/BitsPerComponent'):NumberObject(8),
+            NameObject('/Filter'):NameObject('/DCTDecode')})
+        font=DictionaryObject({NameObject('/Type'):NameObject('/Font'),NameObject('/Subtype'):NameObject('/Type1'),NameObject('/BaseFont'):NameObject('/Helvetica')})
+        page[NameObject('/Resources')]=DictionaryObject({
+            NameObject('/Font'):DictionaryObject({NameObject('/F1'):writer._add_object(font)}),
+            NameObject('/XObject'):DictionaryObject({NameObject('/Im0'):writer._add_object(image)})})
+        content=DecodedStreamObject()
+        content.set_data(b'q 200 0 0 100 50 400 cm /Im0 Do Q BT /F1 14 Tf 30 700 Td (Independent sensor validation is needed.) Tj ET')
+        page[NameObject('/Contents')]=writer._add_object(content)
+        buf=io.BytesIO()
+        writer.write(buf)
+        doc=read_document('figures.pdf',buf.getvalue(),extract_images=True)
+        self.assertEqual(len(doc.images),1)
+        self.assertEqual(doc.images[0]['pdf_page'],1)
+        self.assertEqual(doc.blocks[0]['pdf_page'],1)
+        self.assertEqual(doc.images[0]['width']/doc.images[0]['height'],2)
+        self.assertIn('PDF第1页',doc.images[0]['source'])
+
     def test_editable_pptx_and_sources(self):
         out = make_outline(self.doc, 6)
         scenes = build_scenes(out, DEFAULT_STYLE, sources={b["id"]: b["source"] for b in self.doc.blocks})
@@ -102,7 +132,7 @@ class PipelineTests(unittest.TestCase):
         scenes = build_scenes(out, DEFAULT_STYLE)
         self.assertGreater(len(scenes), 2)
         reconstructed = "".join(e["text"].replace("\n", "") for scene in scenes[1:]
-            for e in scene["elements"] if e["kind"] == "text" and e["size"] == 26)
+            for e in scene["elements"] if e.get("role") == "body")
         self.assertEqual(reconstructed, original * 6)
         export_pptx(scenes)
 
@@ -111,7 +141,7 @@ class PipelineTests(unittest.TestCase):
         Image.new("RGB", (800, 1600), "green").save(pic, "PNG")
         assets = {"image": normalized_image(pic.getvalue(), "chart.png")}
         for ratio in ("16:9", "4:3"):
-            for layout in ("bullets", "columns", "image"):
+            for layout in LAYOUT_LABELS:
                 out = make_outline(self.doc, 6)
                 for s in out["slides"]:
                     s.update(layout=layout, image="image")
@@ -124,6 +154,69 @@ class PipelineTests(unittest.TestCase):
                         self.assertLessEqual(e["y"] + e["h"], scene["height"]+2)
                 ppt = Presentation(io.BytesIO(export_pptx(scenes)))
                 self.assertEqual(len(ppt.slides), len(scenes))
+
+    def test_chapters_never_mix_to_meet_page_target(self):
+        doc=read_document('chapters.md', ('# 总标题\n\n'+ '\n\n'.join(
+            f'## 第{i}章\n独立章节{i}的第一项内容。第二项内容保持章节完整，不得混入其他章节。' for i in range(1,9))).encode())
+        out=make_outline(doc,5)
+        for slide in out['slides'][:-1]:
+            headings={b['heading'] for b in doc.blocks if b['id'] in slide['source_ids']}
+            self.assertEqual(len(headings),1)
+            self.assertIn(slide['title'],headings)
+
+    def test_auto_variety_and_no_invented_flow(self):
+        demo=read_document('demo.md',(ROOT/'examples'/'腕关节传感器.md').read_bytes())
+        scenes=build_scenes(make_outline(demo,10),DEFAULT_STYLE)
+        self.assertGreaterEqual(len({s['layout'] for s in scenes[1:]}),4)
+        chosen,_=recommend_layout({'title':'四项独立研究','bullets':['材料A','结构B','器件C','系统D']})
+        self.assertNotIn(chosen,{'process','comparison'})
+        chosen,_=recommend_layout({'title':'实验流程','bullets':['记录基线','采集参考动作','独立验证']})
+        self.assertEqual(chosen,'process')
+
+    def test_all_layouts_keep_long_original_body_in_native_text(self):
+        original='校准测量 123.45 mm，Independent validation; 保留实验条件。'*7
+        for layout in LAYOUT_LABELS:
+            out=make_outline(self.doc,6)
+            out['slides']=[{'title':'长段落验证','bullets':[original]*4,'source_ids':['S1'],
+                            'notes':'原文','layout':layout,'image':''}]
+            scenes=build_scenes(out,DEFAULT_STYLE)
+            native=Presentation(io.BytesIO(export_pptx(scenes)))
+            body_names={e['id'] for s in scenes for e in s['elements'] if e.get('role')=='body'}
+            actual=''.join(shape.text for slide in native.slides for shape in slide.shapes
+                           if shape.name in body_names)
+            self.assertEqual(re.sub(r'\s+','',actual),re.sub(r'\s+','',original*4),layout)
+
+    def test_skill_audit_detects_broken_paragraph_mapping(self):
+        out=make_outline(self.doc,6)
+        scenes=build_scenes(out,DEFAULT_STYLE)
+        data=export_pptx(scenes)
+        check=audit_native(scenes,data)
+        self.assertTrue(check['passed'],check['errors'])
+        ppt=Presentation(io.BytesIO(data))
+        body=next(e for s in scenes for e in s['elements'] if e.get('role')=='body')
+        shape=next(sh for sl in ppt.slides for sh in sl.shapes if sh.name==body['id'])
+        shape.text='故意损坏正文'
+        broken=io.BytesIO()
+        ppt.save(broken)
+        self.assertFalse(audit_native(scenes,broken.getvalue())['passed'])
+
+    def test_bundle_html_evidence_and_svg_opt_in(self):
+        import zipfile
+        out=make_outline(self.doc,6)
+        out['title']='<script>bad()</script>'
+        scenes=build_scenes(out,DEFAULT_STYLE)
+        pptx=export_pptx(scenes)
+        check=audit_native(scenes,pptx)
+        markup=deck_html(scenes,out['title']).decode()
+        self.assertNotIn('<script>bad()',markup)
+        self.assertEqual(markup.count('<section class="slide"'),len(scenes))
+        for include in (False,True):
+            bundle=export_bundle(scenes,out,DEFAULT_STYLE,self.doc,pptx,check,include)
+            with zipfile.ZipFile(io.BytesIO(bundle)) as z:
+                self.assertIn('evidence.json',z.namelist())
+                self.assertEqual(any(n.startswith('svg/') for n in z.namelist()),include)
+                evidence=json.loads(z.read('evidence.json'))
+                self.assertEqual(evidence['blocks'],self.doc.blocks)
 
     def test_extreme_cover_and_titles(self):
         out = make_outline(self.doc, 6, title="中"*120, subtitle="文"*150)
@@ -172,6 +265,7 @@ class PipelineTests(unittest.TestCase):
         next(b for b in at.button if b.label == "生成 PPTX 下载文件").click().run()
         self.assertFalse(at.exception, str(at.exception))
         self.assertTrue(at.session_state["export"].startswith(b"PK"))
+        self.assertTrue(at.session_state['export_check']['passed'])
         old_sig = at.session_state["export_sig"]
         next(t for t in at.text_input if t.label == "封面标题").set_value("修改后的课堂汇报").run()
         self.assertFalse(at.exception, str(at.exception))
@@ -180,6 +274,12 @@ class PipelineTests(unittest.TestCase):
         self.assertNotEqual(at.session_state["export_sig"], old_sig)
         ppt = Presentation(io.BytesIO(at.session_state["export"]))
         self.assertTrue(any("修改后的课堂汇报" in s.text for s in ppt.slides[0].shapes if s.has_text_frame))
+        selectors=[s for s in at.selectbox if s.label=='版式']
+        selectors[0].select('comparison').run()
+        self.assertFalse(at.exception,str(at.exception))
+        next(b for b in at.button if b.label=='为全部页面重新推荐版式（保留文字）').click().run()
+        self.assertTrue(all(s.value=='auto' for s in at.selectbox if s.label=='版式'))
+        self.assertEqual(next(t for t in at.text_input if t.label=='封面标题').value,'修改后的课堂汇报')
 
 
 if __name__ == "__main__":
